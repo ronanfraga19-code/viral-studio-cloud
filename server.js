@@ -62,8 +62,8 @@ function runOut(bin,args){return new Promise((ok,no)=>{const p=spawn(bin,args,{s
 function runInput(bin,args,input){return new Promise((ok,no)=>{const p=spawn(bin,args,{stdio:['pipe','pipe','pipe'],windowsHide:true});let out='',err='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',no);p.on('close',c=>c===0?ok(out.trim()):no(new Error(err||out||bin+' '+c)));p.stdin.end(input)})}
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 
-app.get('/',(_q,r)=>r.json({ok:true,service:'Viral Studio Cloud Render',version:'7.0',maxBatch:100,concurrency:MAX_CONCURRENCY,mode:'creative-multiplier'}));
-app.get('/health',(_q,r)=>r.json({ok:true,engine:'cloud',version:'8.0',maxBatch:100,concurrency:MAX_CONCURRENCY,active,queued:queue.length,storage:storageSummary(),capabilities:{linkMp4:true,linkInfo:true,linkAnalyze:true,batchZip:true,autoCleanup:true,mobile720p:true}}));
+app.get('/',(_q,r)=>r.json({ok:true,service:'Viral Studio Motor Cloud',version:'8.1',maxBatch:20,concurrency:MAX_CONCURRENCY,mode:'cloud-render'}));
+app.get('/health',(_q,r)=>r.json({ok:true,service:'Viral Studio Motor Cloud',engine:'cloud',version:'8.1',mode:'cloud-render',maxBatch:20,concurrency:MAX_CONCURRENCY,active,queued:queue.length,storage:storageSummary(),capabilities:{linkMp4:true,linkInfo:true,linkAnalyze:true,batchZip:false,autoCleanup:true,mobile720p:true,uploadMp4:true}}));
 app.get('/storage',(_q,r)=>r.json({ok:true,...storageSummary()}));
 app.post('/storage/cleanup',(_q,r)=>{const freed=cleanupStorage(true);r.json({ok:true,freedMB:Math.round(freed/1024/1024),...storageSummary()})});
 function isTikTokUrl(v){
@@ -157,36 +157,42 @@ app.post('/tiktok/link-analyze',async(req,res)=>{
     if(!isTikTokUrl(original))return res.status(400).json({error:'Link do TikTok inválido'});
     const u=await resolveTikTokUrl(original);
     const endpoint='https://www.tiktok.com/oembed?url='+encodeURIComponent(u);
-    const rr=await fetch(endpoint,{headers:{'User-Agent':'ViralStudio/6.6'}});
+    const rr=await fetch(endpoint,{headers:{'User-Agent':'Mozilla/5.0 ViralStudioCloud/8.1'}});
     if(!rr.ok)return res.status(502).json({error:'TikTok não retornou os dados públicos desse vídeo'});
     const ref=await rr.json();
-    const product=String(req.body?.product||'').slice(0,160),facts=String(req.body?.facts||'').slice(0,700);
-    const context=`Título público: ${String(ref.title||'').slice(0,800)}. Creator: ${String(ref.author_name||'').slice(0,160)}. Produto informado: ${product||'não informado'}. Fatos confirmados: ${facts||'nenhum adicional'}.`;
-    const prompt=`Você é um diretor de criativos para TikTok Shop Brasil. Use APENAS o contexto público e os fatos confirmados para criar novas ideias originais inspiradas na estrutura de um vídeo de referência, sem copiar frases extensas do creator. ${context} Responda SOMENTE JSON válido: {"diagnosis":"diagnóstico curto do possível ângulo do criativo","versions":[5 objetos]}. Cada objeto: {"name":"nome","preset":"produto|ugc|problema|curiosidade|oferta","hook":"GANCHO","body":"CORPO","cta":"CTA"}. Cada bloco deve ter no máximo 180 caracteres. O gancho deve prender atenção imediatamente; o corpo deve demonstrar benefícios verdadeiros; o CTA deve convidar a conferir o produto sem inventar preço, desconto, estoque ou urgência. Faça 5 versões realmente diferentes.`;
-    let raw='';try{raw=await runInput('ollama',['run','qwen2.5:3b'],prompt)}catch(e){return res.status(503).json({error:'Ollama/modelo local não está pronto. Execute INSTALAR-IA-LOCAL.bat.',detail:String(e.message||e).slice(-700)})}
-    let data;try{data=JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0]||'')}catch(_){return res.status(500).json({error:'A IA local não devolveu um DNA válido. Tente novamente.',raw:raw.slice(0,1200)})}
-    if(!Array.isArray(data.versions)||!data.versions.length)return res.status(500).json({error:'A IA local não criou versões suficientes.'});
-    const clean=x=>String(x||'').replace(/[\u0000-\u001F]/g,' ').replace(/\s+/g,' ').trim().slice(0,180);
-    const versions=data.versions.slice(0,5).map((v,i)=>{const hook=clean(v.hook),body=clean(v.body),cta=clean(v.cta);return {name:String(v.name||('Versão '+(i+1))).slice(0,80),preset:safePreset(v.preset||['produto','ugc','problema','curiosidade','oferta'][i]),hook,body,cta,script:[hook,body,cta].filter(Boolean).join(' ')}});
-    res.json({ok:true,reference:{url:original,resolved_url:u,title:ref.title||'',author_name:ref.author_name||'',author_url:ref.author_url||'',thumbnail_url:ref.thumbnail_url||''},diagnosis:String(data.diagnosis||'').slice(0,1200),versions});
+    const product=String(req.body?.product||'').trim().slice(0,160);
+    const facts=String(req.body?.facts||'').trim().slice(0,700);
+    const subject=product || String(ref.title||'produto').replace(/[#@]/g,' ').replace(/\s+/g,' ').trim().slice(0,80) || 'produto';
+    const factLine=facts ? ` Destaque somente estes fatos confirmados: ${facts}.` : ' Mostre apenas características visíveis ou confirmadas.';
+    const hooks=[
+      `Olha esse detalhe de ${subject} antes de decidir.`,
+      `Eu reparei numa coisa nesse ${subject} que vale mostrar.`,
+      `Se você está olhando ${subject}, presta atenção nisso.`,
+      `O que mais chama atenção nesse ${subject} é isso aqui.`,
+      `Antes de escolher ${subject}, olha como ele aparece em uso.`
+    ];
+    const bodies=[
+      `Mostre o produto de perto e depois em uso.${factLine}`,
+      `Comece com close, mude o ângulo e demonstre o principal benefício real.${factLine}`,
+      `Use POV e uma demonstração curta para mostrar acabamento, formato e uso.${factLine}`,
+      `Mostre primeiro o detalhe, depois uma visão completa e uma situação real de uso.${factLine}`,
+      `Faça uma demonstração dinâmica com close, plano aberto e movimento natural.${factLine}`
+    ];
+    const ctas=[
+      'Se fez sentido para você, confira os detalhes no carrinho.',
+      'Veja as informações e a oferta disponível no carrinho.',
+      'Confira as opções disponíveis e os detalhes do produto no carrinho.',
+      'Se você gostou, abra o carrinho e veja os detalhes antes de comprar.',
+      'Quer ver mais informações? Confira o produto no carrinho.'
+    ];
+    const presets=['produto','ugc','problema','curiosidade','oferta'];
+    const versions=hooks.map((hook,i)=>({name:`Versão ${i+1}`,preset:presets[i],hook:hook.slice(0,180),body:bodies[i].slice(0,180),cta:ctas[i].slice(0,180),script:`${hook} ${bodies[i]} ${ctas[i]}`}));
+    res.json({ok:true,reference:{url:original,resolved_url:u,title:ref.title||'',author_name:ref.author_name||'',author_url:ref.author_url||'',thumbnail_url:ref.thumbnail_url||''},diagnosis:`Referência pública reconhecida${ref.author_name?` do creator ${ref.author_name}`:''}. O Cloud criou novas estruturas de Gancho + Corpo + CTA sem copiar o conteúdo original.`,versions});
   }catch(e){res.status(500).json({error:'Falha ao analisar o link',detail:String(e.message||e).slice(-1000)})}
 });
 
-app.post('/batch/zip',async(req,res)=>{
-  try{
-    const ids=(Array.isArray(req.body?.ids)?req.body.ids:[]).slice(0,100).map(String);
-    const files=[];
-    for(const id of ids){const j=jobs.get(id),p=outPath(id);if(j&&j.status==='ready'&&fs.existsSync(p))files.push(p)}
-    if(!files.length)return res.status(400).json({error:'Nenhum vídeo pronto para compactar'});
-    const zid='batch-'+crypto.randomUUID(), zpath=path.join(TMP,zid+'.zip');
-    const escaped=files.map(p=>"'"+p.replace(/'/g,"''")+"'").join(',');
-    const script=`Compress-Archive -LiteralPath @(${escaped}) -DestinationPath '${zpath.replace(/'/g,"''")}' -Force`;
-    await runOut('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',script]);
-    setTimeout(()=>cleanFile(zpath),60*60*1000).unref?.();
-    res.json({ok:true,url:'/batch/'+zid+'.zip',count:files.length});
-  }catch(e){res.status(500).json({error:'Falha ao criar ZIP',detail:e.message})}
-});
-app.get('/batch/:name.zip',(req,res)=>{const name=String(req.params.name||'').replace(/[^a-zA-Z0-9_-]/g,'');const p=path.join(TMP,name+'.zip');if(!fs.existsSync(p))return res.status(404).json({error:'ZIP não encontrado'});res.download(p,'viral-studio-lote.zip')});
+app.post('/batch/zip',(_req,res)=>res.status(501).json({error:'ZIP em nuvem ainda não ativado nesta versão. Baixe os vídeos individualmente.'}));
+app.get('/batch/:name.zip',(_req,res)=>res.status(404).json({error:'ZIP não disponível nesta versão'}));
 
 app.get('/assets/:id',(req,res)=>{const id=safeId(req.params.id);if(!id)return res.status(400).json({ok:false});res.json({ok:true,exists:fs.existsSync(rawPath(id))||fs.existsSync(normPath(id)),normalized:fs.existsSync(normPath(id))})});
 app.post('/assets',upload.single('clip'),(req,res)=>{const id=safeId(req.body.id);if(!id||!req.file){if(req.file)cleanFile(req.file.path);return res.status(400).json({error:'ID ou arquivo inválido'})}
